@@ -7,7 +7,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QPushButton, QFileDialog, QSizePolicy, QLabel, QScrollArea
+    QPushButton, QFileDialog, QSizePolicy, QLabel, QScrollArea # QSizePolicy 임포트 유지
 )
 from PySide6.QtCore import Slot, Qt, QTimer
 
@@ -38,6 +38,10 @@ class LogViewerWindow(QMainWindow):
         ]
         
         self.canvas = FigureCanvas(self.figure)
+        
+        # 🚨 핵심 수정: FigureCanvas의 크기 정책을 Expanding으로 설정
+        # 윈도우 크기가 변할 때, 캔버스가 남은 공간을 모두 차지하도록 합니다.
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         # UI 구성 요소
         self.load_button = QPushButton("CSV 파일 불러오기 (경로 설정)")
@@ -126,6 +130,7 @@ class LogViewerWindow(QMainWindow):
             self.axs[1].legend()
 
             # 5. Canvas 갱신
+            # tight_layout()은 Axes 주변의 여백을 자동으로 조정하여 공간을 최적화합니다.
             self.figure.tight_layout()
             self.canvas.draw()
             self.status_label.setText(f"상태: 그래프 업데이트 완료. (File: {os.path.basename(file_path)})")
@@ -167,6 +172,4 @@ class LogViewerWindow(QMainWindow):
 
             # axvspan을 사용하여 2D 그래프(axs)에만 수직 배경색 칠하기
             for ax in axs:
-                # 3D axes는 axvspan을 지원하지 않으므로, 2D axes만 처리해야 함.
-                # 현재 axs 리스트에 2D axes만 전달되므로 문제가 없음
                 ax.axvspan(start_time, stop_time, color=color, alpha=1.0, zorder=-1)
