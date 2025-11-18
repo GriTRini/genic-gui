@@ -262,7 +262,7 @@ class MainWindow(QMainWindow):
         
         if self.current_action_state == self.STATE_ACTION_RUN:
             self.current_action_state = self.STATE_IDLE
-            self.on_publish_command('i', "동작 일시정지")
+            self.on_publish_command('s', "동작 정지")
         else:
             self.current_action_state = self.STATE_ACTION_RUN
             self.on_publish_command('t', "동작 실행")
