@@ -1,10 +1,9 @@
-# src/gui.py (수정된 전체 코드)
 import sys
 import os
-# 🚨 log_viewer 모듈 import
 from src.ros2_node import RclpyThread 
-from src.data_logger import DataLogger
-from src.log_viewer import LogViewerWindow 
+# src.data_logger와 src.log_viewer는 코드에 포함되지 않아 주석 처리하거나 실제 구현이 필요합니다.
+# from src.data_logger import DataLogger
+# from src.log_viewer import LogViewerWindow 
 
 from PySide6.QtWidgets import (
     QMainWindow, QPushButton, QVBoxLayout, QHBoxLayout, 
@@ -12,6 +11,16 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Slot, Qt, QSize, QTimer 
 from PySide6.QtGui import QCloseEvent, QIcon, QPixmap 
+
+# 임시 더미 클래스 (실제 환경에 맞게 수정 필요)
+class DataLogger:
+    pass
+
+class LogViewerWindow:
+    def __init__(self, parent):
+        pass
+    def show(self):
+        pass
 
 class MainWindow(QMainWindow):
     BASE_HEIGHT = 450
@@ -22,6 +31,12 @@ class MainWindow(QMainWindow):
     STATE_MAINTENANCE = "MAINTENANCE"     
     STATE_EMERGENCY = "EMERGENCY"         
     STATE_IDLE = "IDLE"                   
+    
+    # 🚨 연결 상태 상수 추가
+    CONNECTION_STATE_DISCONNECTED = "DISCONNECTED"
+    CONNECTION_STATE_CONNECTING = "CONNECTING"
+    CONNECTION_STATE_CONNECTED = "CONNECTED"
+
 
     def __init__(self):
         super().__init__()
@@ -30,6 +45,8 @@ class MainWindow(QMainWindow):
 
         self.current_action_state = self.STATE_IDLE 
         self.current_fsm_state_text = "N/A"
+        # 🚨 연결 상태 변수 추가
+        self.current_connection_state = self.CONNECTION_STATE_DISCONNECTED 
         
         self.emergency_timer = QTimer(self)
         self.emergency_timer.timeout.connect(self._toggle_emergency_style)
@@ -50,6 +67,8 @@ class MainWindow(QMainWindow):
         self.ros_thread.fsm_state_updated.connect(self.update_fsm_state)
         self.ros_thread.pose_updated.connect(self.update_end_pose) 
         self.ros_thread.joint_angles_updated.connect(self.update_joint_angles)
+        # 🚨 ROS2 연결 피드백 시그널 연결
+        self.ros_thread.connection_feedback.connect(self.handle_connection_feedback) 
 
         # --- UI 설정 ---
         central_widget = QWidget()
@@ -66,8 +85,18 @@ class MainWindow(QMainWindow):
         
         self._apply_dynamic_style(self.BASE_HEIGHT) 
         self.statusBar().showMessage("ROS2 통신 스레드 시작 및 대기 중...", 5000)
+        
+        # 초기 버튼 상태 업데이트 (연결 안 됨 상태)
+        self._update_button_ui() 
     
-    # ... (_setup_status_panel 생략) ...
+    
+    def _create_separator(self):
+        """시각적 분리선 위젯 생성"""
+        line = QWidget()
+        line.setFixedHeight(1)
+        line.setStyleSheet("background-color: #DDD;")
+        return line
+
     def _setup_status_panel(self):
         v_layout = QVBoxLayout()
         v_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -91,7 +120,7 @@ class MainWindow(QMainWindow):
         num_joints = 6
         self.joint_labels = [QLabel(f"Joint {i+1} Angle: N/A") for i in range(num_joints)]
         for label in self.joint_labels:
-             self.joint_v_layout.addWidget(label)
+            self.joint_v_layout.addWidget(label)
 
         joint_scroll_area.setWidget(joint_container)
         
@@ -112,6 +141,15 @@ class MainWindow(QMainWindow):
         self.title_command.setAlignment(Qt.AlignmentFlag.AlignCenter) 
         v_layout.addWidget(self.title_command)
         
+        # 🚨 연결/해제 버튼 추가
+        self.btn_connect = self._create_command_button(
+            "🔌 로봇 연결", 'C', "#FF9800", is_bold=True, 
+            icon_name="network-wired", color_text="black", is_toggle=False
+        )
+        self.btn_connect.clicked.connect(self.on_connect_button_click)
+        v_layout.addWidget(self.btn_connect)
+        v_layout.addWidget(self._create_separator()) 
+
         # I: 대기 상태 전환 (i)
         self.btn_i = self._create_command_button("대기 모드", 'i', "#607D8B", icon_name="process-stop", is_toggle=False)
         self.btn_i.clicked.connect(lambda: self.on_publish_command('i', "대기 모드"))
@@ -134,7 +172,7 @@ class MainWindow(QMainWindow):
         
         v_layout.addItem(QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
         
-        # 🚨 로그 분석 버튼 추가
+        # 로그 분석 버튼
         self.btn_log = self._create_command_button("📊 로그 분석", 'L', "#800080", color_text="white", icon_name="document-open", is_toggle=False)
         self.btn_log.clicked.connect(self.show_log_viewer)
         v_layout.addWidget(self.btn_log)
@@ -164,6 +202,46 @@ class MainWindow(QMainWindow):
             
         return btn
     
+    # -----------------------------------------------------
+    # 🌟 로봇 연결 관리 슬롯
+    # -----------------------------------------------------
+
+    @Slot()
+    def on_connect_button_click(self):
+        """'연결' 또는 '연결 해제' 버튼 클릭 시 호출."""
+        
+        if self.current_connection_state == self.CONNECTION_STATE_CONNECTED:
+            # 연결 해제 로직 (GUI 상태만 변경)
+            self.current_connection_state = self.CONNECTION_STATE_DISCONNECTED
+            self.statusBar().showMessage("🔌 로봇 연결 해제됨 (GUI 상태 변경)", 2000)
+            self._update_button_ui()
+            return
+            
+        if self.current_connection_state == self.CONNECTION_STATE_DISCONNECTED:
+            # 연결 요청 시작
+            self.current_connection_state = self.CONNECTION_STATE_CONNECTING
+            self._update_button_ui()
+            self.statusBar().showMessage("🟡 로봇 연결 요청 중...", 5000)
+            
+            # ROS2 Service Client 호출
+            self.ros_thread.request_connection()
+        
+        # 연결 중 (CONNECTING)일 때는 아무것도 하지 않음
+
+    @Slot(bool, str)
+    def handle_connection_feedback(self, success, message):
+        """ROS2 스레드로부터 연결 결과(success, message)를 수신."""
+        
+        if success:
+            self.current_connection_state = self.CONNECTION_STATE_CONNECTED
+            self.statusBar().showMessage(f"🟢 로봇 연결 성공: {message}", 5000)
+        else:
+            self.current_connection_state = self.CONNECTION_STATE_DISCONNECTED
+            QMessageBox.critical(self, "연결 실패", f"로봇 연결에 실패했습니다: {message}", QMessageBox.StandardButton.Ok)
+            self.statusBar().showMessage(f"❌ 로봇 연결 실패: {message}", 5000)
+            
+        self._update_button_ui()
+
     # -----------------------------------------------------
     # 🌟 로그 분석 창 표시 메서드
     # -----------------------------------------------------
@@ -210,7 +288,6 @@ class MainWindow(QMainWindow):
         """현재 창 높이에 비례하여 폰트, 버튼 크기 및 아이콘 크기를 동적으로 적용합니다."""
         ratio = max(1.0, current_height / self.BASE_HEIGHT)
         font_size = int(self.BASE_FONT_SIZE * min(ratio, 2.0))
-        icon_size = int(30 * min(ratio, 2.0))
         
         widgets = [
             (self.title_status, font_size * 1.5, True),
@@ -220,23 +297,23 @@ class MainWindow(QMainWindow):
             (self.title_command, font_size * 1.7, True),
             (self.btn_exit, font_size * 1.0, True),
             (self.btn_fullscreen, font_size * 1.0, True),
-            (self.btn_log, font_size * 1.0, True), # 🚨 로그 버튼 추가
+            (self.btn_log, font_size * 1.0, True),
         ]
         
         for widget, size, is_bold in widgets:
             bold_style = "font-weight: bold;" if is_bold else ""
             if widget == self.status_label:
-                 widget.setStyleSheet(f"font-size: {size}pt; {bold_style}; padding: 5px; background-color: #F0F0F0; border-radius: 5px;")
+                widget.setStyleSheet(f"font-size: {size}pt; {bold_style}; padding: 5px; background-color: #F0F0F0; border-radius: 5px;")
             elif widget == self.pose_label:
-                 widget.setStyleSheet(f"font-size: {size}pt; {bold_style}; padding: 5px; border: 1px solid #CCC;")
+                widget.setStyleSheet(f"font-size: {size}pt; {bold_style}; padding: 5px; border: 1px solid #CCC;")
             else:
-                 widget.setStyleSheet(f"font-size: {size}pt; {bold_style};")
+                widget.setStyleSheet(f"font-size: {size}pt; {bold_style};")
 
         for label in self.joint_labels:
             label.setStyleSheet(f"font-size: {font_size}pt;")
 
-        # 토글 버튼 외의 버튼 (전체화면, 종료, 대기 모드, 로그 분석) 스타일 적용
-        for btn in [self.btn_fullscreen, self.btn_exit, self.btn_i, self.btn_log]:
+        # 토글 버튼 외의 버튼 (전체화면, 종료, 로그 분석) 스타일 적용
+        for btn in [self.btn_fullscreen, self.btn_exit, self.btn_log]:
             height = int(35 * min(ratio, 2.0))
             btn_font_size = font_size
             
@@ -256,6 +333,10 @@ class MainWindow(QMainWindow):
     def on_run_toggle(self):
         """동작 실행/일시정지 버튼 토글 로직."""
         
+        if self.current_connection_state != self.CONNECTION_STATE_CONNECTED:
+            self.statusBar().showMessage("🔴 로봇이 연결되지 않았습니다. 연결을 먼저 시도하십시오.", 3000)
+            return
+
         if self.current_action_state == self.STATE_EMERGENCY or self.current_action_state == self.STATE_MAINTENANCE:
             self.statusBar().showMessage(f"🔴 현재 {self.current_action_state} 상태입니다. 초기화/복귀 버튼을 먼저 누르십시오.", 3000)
             return
@@ -273,6 +354,10 @@ class MainWindow(QMainWindow):
     def on_maintenance_toggle(self, command_char, command_name):
         """정비 모드 진입/복귀 버튼 토글 로직."""
         
+        if self.current_connection_state != self.CONNECTION_STATE_CONNECTED:
+            self.statusBar().showMessage("🔴 로봇이 연결되지 않았습니다. 연결을 먼저 시도하십시오.", 3000)
+            return
+
         if self.current_action_state == self.STATE_EMERGENCY:
             self.statusBar().showMessage("🔴 긴급 정지 상태입니다. 초기화(긴급 정지 취소) 버튼을 먼저 누르십시오.", 3000)
             return
@@ -290,6 +375,10 @@ class MainWindow(QMainWindow):
     def on_emergency_toggle(self, command_char, command_name):
         """긴급 정지/초기화 버튼 토글 로직."""
         
+        if self.current_connection_state != self.CONNECTION_STATE_CONNECTED and self.current_action_state != self.STATE_EMERGENCY:
+            self.statusBar().showMessage("🔴 로봇이 연결되지 않았습니다. 긴급 정지 명령은 무시됩니다.", 3000)
+            return
+            
         if self.current_action_state == self.STATE_EMERGENCY:
             self.current_action_state = self.STATE_IDLE
             self.on_publish_command('r', "긴급 정지 취소 (초기화)")
@@ -305,69 +394,104 @@ class MainWindow(QMainWindow):
         """현재 상태에 따라 모든 버튼의 텍스트, 아이콘, 활성화 상태를 업데이트합니다."""
         
         current_ratio = self.height() / self.BASE_HEIGHT
+        icon_size = int(30 * min(current_ratio, 2.0))
+        btn_font_size = self.BASE_FONT_SIZE * min(current_ratio, 2.0)
+        height_large = int(50 * min(current_ratio, 2.0))
+        height_small = int(35 * min(current_ratio, 2.0))
         
-        # 1. 모든 버튼 기본 스타일/상태 복구
+        # 1. 모든 명령 버튼 (I, T, M, E) 기본 스타일/상태 복구 및 초기 비활성화
         for btn in [self.btn_t, self.btn_i, self.btn_m, self.btn_e]:
             color = btn.property("color")
             is_bold = btn.property("is_bold")
             color_text = btn.property("color_text")
             bold_style = "font-weight: bold;" if is_bold else ""
             
-            height = int(50 * min(current_ratio, 2.0))
-            btn_font_size = self.BASE_FONT_SIZE * 1.2 * min(current_ratio, 2.0)
+            btn_font_size_large = self.BASE_FONT_SIZE * 1.2 * min(current_ratio, 2.0)
             
-            # 기본 스타일 적용
-            btn.setStyleSheet(f"background-color: {color}; color: {color_text}; height: {height}px; font-size: {btn_font_size}pt; {bold_style};")
-            btn.setEnabled(True)
+            # 기본 스타일 적용 (일단 비활성화 스타일 적용)
+            btn.setStyleSheet(f"background-color: #AAAAAA; color: #666666; height: {height_large}px; font-size: {btn_font_size_large}pt; {bold_style};")
+            btn.setEnabled(False) # 연결 상태에 따라 나중에 활성화
             
             # 텍스트, 아이콘 복구
             if btn == self.btn_t:
-                 btn.setText("동작 실행")
-                 btn.setIcon(QIcon.fromTheme("media-playback-start"))
+                btn.setText("동작 실행")
+                btn.setIcon(QIcon.fromTheme("media-playback-start"))
             elif btn == self.btn_m:
-                 btn.setText("정비 모드")
-                 btn.setIcon(QIcon.fromTheme("preferences-system"))
+                btn.setText("정비 모드")
+                btn.setIcon(QIcon.fromTheme("preferences-system"))
             elif btn == self.btn_e:
-                 btn.setText("긴급 정지")
-                 btn.setIcon(QIcon.fromTheme("media-playback-stop"))
-                 if self.emergency_timer.isActive():
-                     self.emergency_timer.stop() 
+                btn.setText("긴급 정지")
+                btn.setIcon(QIcon.fromTheme("media-playback-stop"))
+                if self.emergency_timer.isActive():
+                    self.emergency_timer.stop() 
         
-        # 2. 상태별 특수 처리
-        if self.current_action_state == self.STATE_EMERGENCY:
-            # E 버튼만 '초기화(r)'로 전환 및 활성화, 다른 명령 비활성화
-            self.btn_e.setText("초기화")
-            self.btn_e.setIcon(QIcon.fromTheme("system-run"))
-            self._toggle_emergency_style() # 깜빡임 시작
-            
-            self.btn_t.setEnabled(False)
-            self.btn_i.setEnabled(False)
-            self.btn_m.setEnabled(False)
-        
-        elif self.current_action_state == self.STATE_MAINTENANCE:
-            # M 버튼을 '대기 모드(i)'로 전환
-            self.btn_m.setText("대기 모드")
-            self.btn_m.setStyleSheet(f"background-color: orange; color: white; height: {int(50 * min(current_ratio, 2.0))}px; font-size: {self.BASE_FONT_SIZE * 1.2 * min(current_ratio, 2.0)}pt;")
-            self.btn_m.setIcon(QIcon.fromTheme("process-stop"))
-            
-            self.btn_t.setEnabled(False)
-            self.btn_i.setEnabled(False)
-            self.btn_e.setEnabled(True) 
-        
-        elif self.current_action_state == self.STATE_ACTION_RUN:
-            # T 버튼을 '일시정지(i)'로 전환
-            self.btn_t.setText("정지")
-            self.btn_t.setStyleSheet(f"background-color: orange; color: white; height: {int(50 * min(current_ratio, 2.0))}px; font-size: {self.BASE_FONT_SIZE * 1.2 * min(current_ratio, 2.0)}pt;")
-            self.btn_t.setIcon(QIcon.fromTheme("media-playback-pause"))
-        
-        # 3. 동적 크기 조정 (토글 버튼 외) 및 아이콘 크기 재적용
-        icon_size = int(30 * min(current_ratio, 2.0))
-        for btn in [self.btn_t, self.btn_i, self.btn_m, self.btn_e, self.btn_fullscreen, self.btn_exit, self.btn_log]:
-            if btn.property("is_toggle") == False:
-                height = int(35 * min(current_ratio, 2.0))
-                btn_font_size = self.BASE_FONT_SIZE * min(current_ratio, 2.0)
-                btn.setStyleSheet(f"background-color: {btn.property('color')}; color: {btn.property('color_text')}; height: {height}px; font-size: {btn_font_size}pt; font-weight: bold;")
+        # 2. 연결 버튼 상태별 처리
+        if self.current_connection_state == self.CONNECTION_STATE_DISCONNECTED:
+            self.btn_connect.setText("🔌 로봇 연결")
+            self.btn_connect.setIcon(QIcon.fromTheme("network-wired"))
+            self.btn_connect.setStyleSheet(f"background-color: #FF9800; color: black; font-weight: bold; height: {height_large}px; font-size: {btn_font_size * 1.2}pt;")
+            self.btn_connect.setEnabled(True)
 
+        elif self.current_connection_state == self.CONNECTION_STATE_CONNECTING:
+            self.btn_connect.setText("🟡 연결 요청 중...")
+            self.btn_connect.setIcon(QIcon.fromTheme("media-skip-forward")) 
+            self.btn_connect.setStyleSheet(f"background-color: #4DB6AC; color: white; font-weight: bold; height: {height_large}px; font-size: {btn_font_size * 1.2}pt;")
+            self.btn_connect.setEnabled(False)
+
+        elif self.current_connection_state == self.CONNECTION_STATE_CONNECTED:
+            # 2-1. 연결 성공 시 버튼 활성화 및 스타일 변경
+            self.btn_connect.setText("✅ 연결됨 (클릭하여 해제)")
+            self.btn_connect.setIcon(QIcon.fromTheme("network-idle"))
+            self.btn_connect.setStyleSheet(f"background-color: #4CAF50; color: white; font-weight: bold; height: {height_large}px; font-size: {btn_font_size * 1.2}pt;")
+            self.btn_connect.setEnabled(True) 
+            
+            # 2-2. 로봇 액션 상태별 특수 처리 (연결 시에만 실행)
+            
+            # 모든 명령 버튼 기본 스타일 복구 (활성화 준비)
+            for btn in [self.btn_t, self.btn_i, self.btn_m, self.btn_e]:
+                color = btn.property("color")
+                is_bold = btn.property("is_bold")
+                color_text = btn.property("color_text")
+                bold_style = "font-weight: bold;" if is_bold else ""
+                btn_font_size_large = self.BASE_FONT_SIZE * 1.2 * min(current_ratio, 2.0)
+                btn.setStyleSheet(f"background-color: {color}; color: {color_text}; height: {height_large}px; font-size: {btn_font_size_large}pt; {bold_style};")
+                btn.setEnabled(True)
+
+            if self.current_action_state == self.STATE_EMERGENCY:
+                # E 버튼만 '초기화(r)'로 전환 및 활성화, 다른 명령 비활성화
+                self.btn_e.setText("초기화")
+                self.btn_e.setIcon(QIcon.fromTheme("system-run"))
+                self._toggle_emergency_style() # 깜빡임 시작
+                
+                self.btn_t.setEnabled(False)
+                self.btn_i.setEnabled(False)
+                self.btn_m.setEnabled(False)
+            
+            elif self.current_action_state == self.STATE_MAINTENANCE:
+                # M 버튼을 '대기 모드(i)'로 전환
+                self.btn_m.setText("대기 모드")
+                self.btn_m.setStyleSheet(f"background-color: orange; color: white; height: {height_large}px; font-size: {self.BASE_FONT_SIZE * 1.2 * min(current_ratio, 2.0)}pt;")
+                self.btn_m.setIcon(QIcon.fromTheme("process-stop"))
+                
+                self.btn_t.setEnabled(False)
+                self.btn_i.setEnabled(False)
+                self.btn_e.setEnabled(True) 
+            
+            elif self.current_action_state == self.STATE_ACTION_RUN:
+                # T 버튼을 '정지(i)'로 전환
+                self.btn_t.setText("정지")
+                self.btn_t.setStyleSheet(f"background-color: orange; color: white; height: {height_large}px; font-size: {self.BASE_FONT_SIZE * 1.2 * min(current_ratio, 2.0)}pt;")
+                self.btn_t.setIcon(QIcon.fromTheme("media-playback-pause"))
+        
+        # 3. 비토글 버튼 동적 크기 및 아이콘 크기 재적용
+        for btn in [self.btn_connect, self.btn_fullscreen, self.btn_exit, self.btn_log]:
+            btn.setIconSize(QSize(icon_size, icon_size))
+            if btn.property("is_toggle") == False and btn != self.btn_connect:
+                 btn_font_size_small = self.BASE_FONT_SIZE * min(current_ratio, 2.0)
+                 btn.setStyleSheet(f"background-color: {btn.property('color')}; color: {btn.property('color_text')}; height: {height_small}px; font-size: {btn_font_size_small}pt; font-weight: bold;")
+
+        # 토글 버튼 아이콘 크기 재적용
+        for btn in [self.btn_t, self.btn_i, self.btn_m, self.btn_e]:
             btn.setIconSize(QSize(icon_size, icon_size))
 
 
@@ -392,10 +516,10 @@ class MainWindow(QMainWindow):
         current_joint_count = len(self.joint_labels)
         
         if len(angles) > current_joint_count and len(angles) <= 20:
-             for i in range(current_joint_count, len(angles)):
-                 new_label = QLabel(f"Joint {i+1} Angle: N/A")
-                 self.joint_v_layout.addWidget(new_label)
-                 self.joint_labels.append(new_label)
+            for i in range(current_joint_count, len(angles)):
+                new_label = QLabel(f"Joint {i+1} Angle: N/A")
+                self.joint_v_layout.addWidget(new_label)
+                self.joint_labels.append(new_label)
 
         for i, angle in enumerate(angles):
             if i < len(self.joint_labels):
@@ -432,3 +556,11 @@ class MainWindow(QMainWindow):
         self.ros_thread.stop()
         self.emergency_timer.stop() 
         event.accept()
+
+# --- Main 실행 블록 (테스트용) ---
+if __name__ == '__main__':
+    from PySide6.QtWidgets import QApplication
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
