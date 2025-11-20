@@ -274,7 +274,7 @@ class MainWindow(QMainWindow):
             
     def _start_ros2_robot_node_process(self):
         """ROS 2 노드를 QProcess를 통해 실행합니다."""
-        ros2_run_cmd = "ros2 run py_talker_test talker" # "ros2 run genic_ros2_robot robot_controller_node"
+        ros2_run_cmd = "ros2 run genic_ros2_robot robot_controller_node"
         command_list = self._get_ros2_env_command(ros2_run_cmd)
         program = command_list[0] 
         arguments = command_list[1:]
@@ -585,7 +585,7 @@ class MainWindow(QMainWindow):
 
         for i, angle in enumerate(angles):
             if i < len(self.joint_labels):
-                self.joint_labels[i].setText(f"Joint {i+1} Angle: {angle:.4f} rad")
+                self.joint_labels[i].setText(f"Joint {i+1} Angle: {angle:.4f} deg")
                 self.joint_labels[i].show()
             
         for i in range(len(angles), len(self.joint_labels)):
@@ -595,9 +595,24 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def update_fsm_state(self, status_text):
+        """
+        ROS 2 토픽으로부터 FSM 상태 문자열을 받아 저장하고 표시합니다.
+        데이터가 한 번만 날아오더라도 마지막 유효한 값을 계속 유지합니다.
+        """
+        # 1. 유효성 검사: 빈 문자열이나 None이 들어오면 무시 (기존 저장된 상태 유지)
+        if not status_text or status_text.strip() == "":
+            return
+
+        # 2. 상태 저장 (Persistent Storage): 클래스 멤버 변수에 저장하여 '기억'하게 함
         self.current_fsm_state_text = status_text
-        self.status_label.setText(status_text)
         
+        # 3. UI 업데이트: 저장된 값을 포맷에 맞춰 라벨에 표시
+        # (기존에는 텍스트만 덮어씌웠다면, 접두어를 포함하여 가독성을 높임)
+        display_text = f"FSM {self.current_fsm_state_text}"
+        self.status_label.setText(display_text)
+        
+        # (선택 사항) 상태가 변경되었음을 콘솔에도 기록
+        print(f"[GUI] FSM State Updated & Stored: {self.current_fsm_state_text}")
     @Slot(str, str)
     def on_publish_command(self, command_char, command_name):
         publisher = self.ros_thread.get_publisher()

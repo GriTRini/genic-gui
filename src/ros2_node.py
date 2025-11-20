@@ -66,7 +66,7 @@ class RclpyThread(QThread):
         
         # 1. FSM 상태 구독
         sub_node.create_subscription(
-            String, '/fsm_state', 
+            String, '/robot/fsm_state', 
             lambda msg: self.fsm_state_updated.emit(f"State: {msg.data}"), 10
         )
 
