@@ -117,7 +117,7 @@ class MainWindow(QMainWindow):
         v_layout = QVBoxLayout()
         v_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self.title_command = QLabel("✨ 로봇 제어 명령 ✨")
+        self.title_command = QLabel(" 로봇 제어 명령 ")
         self.title_command.setAlignment(Qt.AlignmentFlag.AlignCenter) 
         v_layout.addWidget(self.title_command)
         
