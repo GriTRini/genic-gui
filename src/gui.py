@@ -264,7 +264,7 @@ class MainWindow(QMainWindow):
             self._start_ros2_robot_node_process()
             
     def _start_ros2_robot_node_process(self):
-        ros2_run_cmd = "ros2 run genic_ros2_robot robot_controller_node"
+        ros2_run_cmd = "ros2 launch genic_ros2_robot robot_system.launch.py"
         command_list = self._get_ros2_env_command(ros2_run_cmd)
         program = command_list[0] 
         arguments = command_list[1:]
