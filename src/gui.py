@@ -393,18 +393,53 @@ class MainWindow(QMainWindow):
 
     @Slot(str, str)
     def on_maintenance_toggle(self, command_char, command_name):
+        # 1. 긴급 정지 상태인 경우: 동작 차단
         if self.current_action_state == self.STATE_EMERGENCY:
             self.statusBar().showMessage("🔴 긴급 정지 상태입니다. 초기화(긴급 정지 취소) 버튼을 먼저 누르십시오.", 3000)
             return
 
+        # 2. 이미 정비 모드인 경우: 모드 해제 (대기 모드로 복귀)
         if self.current_action_state == self.STATE_MAINTENANCE:
             self.current_action_state = self.STATE_IDLE
             self.on_publish_command('i', "정비 모드 복귀") 
+            self._update_button_ui()
+            
+        # 3. 정비 모드로 진입하려는 경우: '큰' 팝업창 확인 후 진행
         elif command_char == 'm' and (self.current_action_state == self.STATE_IDLE or self.current_action_state == self.STATE_ACTION_RUN):
-            self.current_action_state = self.STATE_MAINTENANCE
-            self.on_publish_command('m', command_name)
-        
-        self._update_button_ui()
+            
+            # [수정됨] QMessageBox 객체 직접 생성하여 사이즈 조절
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle('정비 모드 진입 확인')
+            msg_box.setText("원점으로 이동합니다.\n진행하시겠습니까?")
+            msg_box.setIcon(QMessageBox.Question)
+            msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            msg_box.setDefaultButton(QMessageBox.No) # 실수 방지를 위해 No를 기본 선택으로
+
+            # [핵심] 스타일시트로 크기와 폰트 키우기
+            # min-width: 창의 최소 너비
+            # font-size: 글자 크기 (글자가 커지면 창도 자연스럽게 커짐)
+            msg_box.setStyleSheet("""
+                QLabel {
+                    min-width: 400px;
+                    min-height: 80px;
+                    font-size: 16pt;
+                }
+                QPushButton {
+                    width: 120px;
+                    height: 40px;
+                    font-size: 14pt;
+                }
+            """)
+
+            # 팝업 실행 및 결과 확인
+            ret = msg_box.exec()
+
+            if ret == QMessageBox.Yes:
+                self.current_action_state = self.STATE_MAINTENANCE
+                self.on_publish_command('m', command_name)
+                self._update_button_ui()
+            else:
+                self.statusBar().showMessage("취소: 정비 모드 진입을 중단했습니다.", 2000)
 
     @Slot(str, str)
     def on_emergency_toggle(self, command_char, command_name):
