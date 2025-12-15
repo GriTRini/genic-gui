@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QLabel, QSpacerItem, QSizePolicy, QMessageBox, QScrollArea
 )
 from PySide6.QtCore import (
-    Slot, Qt, QSize, QTimer, QProcess
+    Slot, Qt, QSize, QTimer
 )
 from PySide6.QtGui import QCloseEvent, QIcon
 
@@ -50,15 +50,7 @@ class MainWindow(QMainWindow):
         self.data_logger = DataLogger() 
         self.ros_thread.start()
         
-        # 2. 외부 노드 프로세스 (QProcess) 초기화
-        self.robot_node_process = QProcess(self) 
-        self.robot_node_running = False
-        
-        self.robot_node_process.readyReadStandardOutput.connect(self._handle_node_stdout)
-        self.robot_node_process.readyReadStandardError.connect(self._handle_node_stderr)
-        self.robot_node_process.stateChanged.connect(self._handle_node_state_change)
-
-        # 3. ROS2 Signals 연결
+        # 2. ROS2 Signals 연결
         self.ros_thread.fsm_state_updated.connect(self.update_fsm_state)
         self.ros_thread.pose_updated.connect(self.update_end_pose) 
         self.ros_thread.joint_angles_updated.connect(self.update_joint_angles)
@@ -157,20 +149,9 @@ class MainWindow(QMainWindow):
         self.btn_test_toggle.clicked.connect(self.send_ethercat_toggle_cmd)
         v_layout.addWidget(self.btn_test_toggle)
         # ============================================================
-
-        # 연결 버튼
-        self.btn_connect = self._create_command_button(
-            "🔌 연결 버튼", 
-            'C', 
-            "#FF9800", 
-            color_text="white", 
-            icon_name="network-wired", 
-            is_toggle=False,
-            height_ratio=1.0 
-        )
-        self.btn_connect.clicked.connect(self.toggle_ros2_robot_node) 
-        v_layout.addWidget(self.btn_connect)
         
+        # (참고: 연결 버튼이 삭제되었습니다)
+
         v_layout.addItem(QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
         
         # 기타 버튼
@@ -237,84 +218,6 @@ class MainWindow(QMainWindow):
             btn_font_size = self.BASE_FONT_SIZE * 1.2 * min(current_ratio, 2.0)
             btn.setStyleSheet(f"background-color: #AAAAAA; color: #666666; height: {height}px; font-size: {btn_font_size}pt;")
 
-    def _get_ros2_env_command(self, ros2_command):
-        # 🚨 사용자 환경에 맞게 경로를 수정해야 합니다. (예: Humble)
-        ros2_setup_path = "/opt/ros/humble/setup.bash" 
-        workspace_setup_path = os.path.expanduser("~/colcon_ws/install/setup.bash") 
-        
-        command = [
-            'bash', '-c', 
-            f'source {ros2_setup_path} && source {workspace_setup_path} && exec {ros2_command}'
-        ]
-        return command
-
-    @Slot()
-    def toggle_ros2_robot_node(self):
-        if self.robot_node_running:
-            reply = QMessageBox.question(
-                self, '연결 끊기 확인', 
-                "실행 중인 로봇 노드 연결을 끊고 종료하시겠습니까?", 
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                self.stop_ros2_robot_node_process()
-            else:
-                return
-        else:
-            self._start_ros2_robot_node_process()
-            
-    def _start_ros2_robot_node_process(self):
-        ros2_run_cmd = "ros2 launch genic_ros2_robot robot_system.launch.py"
-        command_list = self._get_ros2_env_command(ros2_run_cmd)
-        program = command_list[0] 
-        arguments = command_list[1:]
-
-        try:
-            self.robot_node_process.start(program, arguments)
-            self.statusBar().showMessage(f"🟢 로봇 노드 실행 명령 발행: {ros2_run_cmd}", 5000)
-            print(f"[QProcess INFO] 명령어 실행: {' '.join(command_list)}")
-            self.btn_connect.setEnabled(False) 
-        except Exception as e:
-            self.statusBar().showMessage(f"🔴 로봇 노드 실행 실패: {e}", 5000)
-            print(f"[QProcess ERROR] 실행 중 예외 발생: {e}")
-            self.btn_connect.setEnabled(True)
-
-    def stop_ros2_robot_node_process(self):
-        if self.robot_node_process.state() == QProcess.Running:
-            print("Terminating running robot node process...")
-            self.statusBar().showMessage("🟡 로봇 노드 종료를 요청합니다...", 2000)
-            self.robot_node_process.terminate() 
-            
-    def _handle_node_stdout(self):
-        data = self.robot_node_process.readAllStandardOutput()
-        text = data.data().decode('utf-8', errors='ignore')
-        print(f"[NODE STDOUT] {text.strip()}")
-
-    def _handle_node_stderr(self):
-        data = self.robot_node_process.readAllStandardError()
-        text = data.data().decode('utf-8', errors='ignore')
-        print(f"[NODE STDERR] {text.strip()}")
-
-    def _handle_node_state_change(self, state):
-        if state == QProcess.Running:
-            self.robot_node_running = True
-            self.statusBar().showMessage("✅ 로봇 노드 실행 중...", 0) 
-            self._update_button_ui()
-        
-        elif state == QProcess.NotRunning:
-            exit_code = self.robot_node_process.exitCode()
-            exit_status = self.robot_node_process.exitStatus()
-            status_text = "정상 종료" if exit_status == QProcess.NormalExit else "비정상 종료"
-            
-            self.robot_node_running = False
-            self.statusBar().showMessage(f"❌ 로봇 노드 종료됨: {status_text} (Code: {exit_code})", 5000)
-            print(f"[QProcess INFO] 노드 종료됨: {status_text} (Code: {exit_code})")
-            
-            if exit_status != QProcess.NormalExit and self.robot_node_process.error() == QProcess.ProcessError.Crashed:
-                pass 
-
-            self._update_button_ui()
-
     def _apply_dynamic_style(self, current_height):
         ratio = max(1.0, current_height / self.BASE_HEIGHT)
         font_size = int(self.BASE_FONT_SIZE * min(ratio, 2.0))
@@ -340,10 +243,10 @@ class MainWindow(QMainWindow):
         for label in self.joint_labels:
             label.setStyleSheet(f"font-size: {font_size}pt;")
 
-        # [중요] 스타일 적용 리스트에 self.btn_test_toggle 추가
+        # [수정됨] 연결 버튼 제거됨
         all_btns = [
             self.btn_t, self.btn_i, self.btn_m, self.btn_e, 
-            self.btn_connect, self.btn_fullscreen, self.btn_exit, self.btn_log,
+            self.btn_fullscreen, self.btn_exit, self.btn_log,
             self.btn_test_toggle 
         ]
         
@@ -372,8 +275,6 @@ class MainWindow(QMainWindow):
             btn.setIconSize(QSize(icon_size, icon_size))
 
         self._update_button_ui() 
-        if self.robot_node_running:
-            self.btn_connect.setStyleSheet(f"background-color: #4CAF50; color: white; font-weight: bold;")
 
     
     @Slot()
@@ -407,17 +308,13 @@ class MainWindow(QMainWindow):
         # 3. 정비 모드로 진입하려는 경우: '큰' 팝업창 확인 후 진행
         elif command_char == 'm' and (self.current_action_state == self.STATE_IDLE or self.current_action_state == self.STATE_ACTION_RUN):
             
-            # [수정됨] QMessageBox 객체 직접 생성하여 사이즈 조절
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle('정비 모드 진입 확인')
             msg_box.setText("원점으로 이동합니다.\n진행하시겠습니까?")
             msg_box.setIcon(QMessageBox.Question)
             msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-            msg_box.setDefaultButton(QMessageBox.No) # 실수 방지를 위해 No를 기본 선택으로
+            msg_box.setDefaultButton(QMessageBox.No)
 
-            # [핵심] 스타일시트로 크기와 폰트 키우기
-            # min-width: 창의 최소 너비
-            # font-size: 글자 크기 (글자가 커지면 창도 자연스럽게 커짐)
             msg_box.setStyleSheet("""
                 QLabel {
                     min-width: 400px;
@@ -431,7 +328,6 @@ class MainWindow(QMainWindow):
                 }
             """)
 
-            # 팝업 실행 및 결과 확인
             ret = msg_box.exec()
 
             if ret == QMessageBox.Yes:
@@ -507,10 +403,10 @@ class MainWindow(QMainWindow):
         
         icon_size = int(30 * min(current_ratio, 2.0))
         
-        # [중요] self.btn_test_toggle 포함
+        # [수정됨] 연결 버튼 제거됨
         all_btns = [
             self.btn_t, self.btn_i, self.btn_m, self.btn_e, 
-            self.btn_connect, self.btn_fullscreen, self.btn_exit, self.btn_log, 
+            self.btn_fullscreen, self.btn_exit, self.btn_log, 
             self.btn_test_toggle
         ]
         
@@ -533,17 +429,7 @@ class MainWindow(QMainWindow):
             
             btn.setIconSize(QSize(icon_size, icon_size))
             
-            if btn == self.btn_connect:
-                if self.robot_node_running:
-                    btn.setText("🔴 연결 끊기")
-                    btn.setEnabled(True)
-                    btn.setStyleSheet(f"background-color: #F44336; color: white; font-weight: bold; height: {height}px; font-size: {btn_font_size}pt;")
-                    btn.setIcon(QIcon.fromTheme("network-disconnect"))
-                else:
-                    btn.setText("🔌 연결 버튼")
-                    btn.setEnabled(True)
-                    btn.setStyleSheet(f"background-color: #FF9800; color: white; font-weight: bold; height: {height}px; font-size: {btn_font_size}pt;")
-                    btn.setIcon(QIcon.fromTheme("network-wired"))
+            # [수정됨] 연결 버튼 관련 UI 업데이트 로직 삭제
 
     def resizeEvent(self, event):
         current_height = event.size().height()
@@ -637,15 +523,7 @@ class MainWindow(QMainWindow):
         self.ros_thread.stop()
         self.emergency_timer.stop() 
         
-        if self.robot_node_process.state() == QProcess.Running:
-            print("Terminating running robot node process (ROS 2 Node)...")
-            self.robot_node_process.terminate() 
-            
-            if not self.robot_node_process.waitForFinished(3000): 
-                self.robot_node_process.kill()
-                print("Robot node process killed forcibly (Connection severed).")
-            else:
-                print("Robot node process terminated safely.")
+        # [수정됨] 로봇 노드 프로세스 종료 로직 삭제됨
         
         event.accept()
 
