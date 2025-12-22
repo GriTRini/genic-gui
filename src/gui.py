@@ -30,21 +30,28 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("DSRPY 로봇 제어 시스템")
         
-        # [주의] __init__에서 showFullScreen()을 바로 호출하지 않고, UI 생성 후 마지막에 호출합니다.
+        # 키보드 제어용 변수
+        self.current_manual_key = None   
+        self.current_manual_cmd = 0      
+        
+        # 연속 전송을 위한 타이머
+        self.manual_control_timer = QTimer(self)
+        self.manual_control_timer.setInterval(100) 
+        self.manual_control_timer.timeout.connect(self._on_manual_timer_tick)
 
         self.current_action_state = self.STATE_IDLE 
         self.current_fsm_state_text = "N/A"
+        
+        # [관리자용 Test CMD 변수 유지]
         self.next_cmd_value = 31 
         
         self.is_manual_mode = False
         self.last_data_time = 0.0  
         
-        # 연결 상태 체크 타이머
         self.connection_check_timer = QTimer(self)
         self.connection_check_timer.timeout.connect(self._check_connection_status)
         self.connection_check_timer.start(1000) 
 
-        # 긴급 정지 깜빡임 타이머
         self.emergency_timer = QTimer(self)
         self.emergency_timer.timeout.connect(self._toggle_emergency_style) 
         self.emergency_blink_on = False
@@ -65,49 +72,93 @@ class MainWindow(QMainWindow):
         self.central_stack = QStackedWidget()
         self.setCentralWidget(self.central_stack)
 
-        # 1. 사용자 모드 UI 생성
         self.user_mode_widget = QWidget()
         self._setup_user_mode_ui()
         self.central_stack.addWidget(self.user_mode_widget)
 
-        # 2. 관리자 모드 UI 생성 (버튼 객체들이 여기서 생성됨)
         self.admin_mode_widget = QWidget()
         self._setup_admin_mode_ui() 
         self.central_stack.addWidget(self.admin_mode_widget)
 
         self.central_stack.setCurrentIndex(0)
-        
-        # UI 생성 완료 후 전체 화면 적용
         self.showFullScreen()
-        
-        # 초기 스타일 적용
         self._apply_dynamic_style(self.height())
         self.statusBar().showMessage("시스템 준비 완료", 5000)
-
-    # ============================================================
-    # 연결 상태 확인 로직
-    # ============================================================
-    def _check_connection_status(self):
-        current_time = time.time()
-        time_diff = current_time - self.last_data_time
         
-        if self.last_data_time == 0.0 or time_diff > 3.0:
-            self.lbl_connection_status.setText("NOT CONNECTED")
-            self.lbl_connection_status.setStyleSheet("background-color: #F44336; color: white; border-radius: 10px; padding: 10px; font-weight: bold; font-size: 16px;")
-        else:
-            self.lbl_connection_status.setText("CONNECTED")
-            self.lbl_connection_status.setStyleSheet("background-color: #4CAF50; color: white; border-radius: 10px; padding: 10px; font-weight: bold; font-size: 16px;")
+        self.setFocusPolicy(Qt.StrongFocus)
 
     # ============================================================
-    # 사용자 모드 UI 설정 (종료 버튼 추가됨)
+    # 수동 제어 타이머 로직
+    # ============================================================
+    def _on_manual_timer_tick(self):
+        if self.current_manual_cmd != 0:
+            pub = self.ros_thread.get_publisher()
+            if pub and hasattr(pub, 'publish_manual_cmd'):
+                pub.publish_manual_cmd(self.current_manual_cmd)
+
+    # ============================================================
+    # 키보드 이벤트 처리
+    # ============================================================
+    def keyPressEvent(self, event):
+        if not self.is_manual_mode:
+            return super().keyPressEvent(event)
+
+        if event.isAutoRepeat():
+            return
+
+        if self.current_manual_key is not None:
+            return
+
+        key = event.key()
+        cmd_val = 0
+        direction_str = ""
+
+        if key == Qt.Key_Up:
+            cmd_val = 1
+            direction_str = "전진 (Forward)"
+        elif key == Qt.Key_Down:
+            cmd_val = 2
+            direction_str = "후진 (Backward)"
+        elif key == Qt.Key_Left:
+            cmd_val = 3
+            direction_str = "좌회전 (Left)"
+        elif key == Qt.Key_Right:
+            cmd_val = 4
+            direction_str = "우회전 (Right)"
+        
+        if cmd_val != 0:
+            self.current_manual_key = key
+            self.current_manual_cmd = cmd_val
+            self._on_manual_timer_tick()
+            self.manual_control_timer.start()
+            self.lbl_manual_indicator.setText(f"🚀 연속 이동 중: {direction_str}")
+            self.statusBar().showMessage(f"Manual Move Started: {cmd_val}", 1000)
+
+    def keyReleaseEvent(self, event):
+        if not self.is_manual_mode:
+            return super().keyReleaseEvent(event)
+
+        if event.isAutoRepeat():
+            return
+
+        if event.key() == self.current_manual_key:
+            self.manual_control_timer.stop()
+            self.current_manual_key = None
+            self.current_manual_cmd = 0
+            self.lbl_manual_indicator.setText("⚠️ 현재 수동 제어 모드입니다. (입력 대기)")
+            self.statusBar().showMessage("Manual Move Stopped", 1000)
+
+    # ============================================================
+    # 사용자 모드 UI 설정 (Vacuum 버튼 추가됨)
     # ============================================================
     def _setup_user_mode_ui(self):
         layout = QVBoxLayout(self.user_mode_widget)
         layout.setContentsMargins(30, 30, 30, 30)
         layout.setSpacing(20)
         
-        # 1. 상단 영역
+        # 1. 상단 영역 (Manual Mode + Vacuum Control)
         top_layout = QHBoxLayout()
+        
         self.lbl_connection_status = QLabel("WAITING...")
         self.lbl_connection_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_connection_status.setFixedSize(200, 60)
@@ -116,6 +167,18 @@ class MainWindow(QMainWindow):
         
         top_layout.addStretch() 
         
+        # [NEW] Vacuum Control 버튼 추가
+        self.btn_user_vacuum = QPushButton("Vacuum OFF")
+        self.btn_user_vacuum.setCheckable(True)
+        self.btn_user_vacuum.setFixedSize(180, 60)
+        self.btn_user_vacuum.setStyleSheet("""
+            QPushButton { font-size: 16px; font-weight: bold; background-color: #607D8B; color: white; border-radius: 10px; } 
+            QPushButton:checked { background-color: #2196F3; color: white; border: 3px solid #BBDEFB; }
+        """)
+        self.btn_user_vacuum.clicked.connect(self.on_user_vacuum_toggle)
+        top_layout.addWidget(self.btn_user_vacuum)
+
+        # 기존 Manual Mode 버튼
         self.btn_user_manual = QPushButton("수동 모드 OFF")
         self.btn_user_manual.setIcon(QIcon.fromTheme("input-mouse"))
         self.btn_user_manual.setCheckable(True)
@@ -129,7 +192,7 @@ class MainWindow(QMainWindow):
         
         layout.addLayout(top_layout)
 
-        # 2. 중앙 영역 (실행/정지 버튼 꽉 채우기)
+        # 2. 중앙 영역
         center_layout = QHBoxLayout()
         self.btn_user_toggle = QPushButton("\n동작 실행\n(RUN)")
         self.btn_user_toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -141,13 +204,10 @@ class MainWindow(QMainWindow):
         """)
         self.btn_user_toggle.clicked.connect(self.on_user_toggle_click)
         center_layout.addWidget(self.btn_user_toggle)
-        
-        layout.addLayout(center_layout, 1) # 비율 1로 남은 공간 차지
+        layout.addLayout(center_layout, 1)
 
         # 3. 하단 영역
         bottom_layout = QHBoxLayout()
-        
-        # [NEW] 왼쪽 아래: 프로그램 종료 버튼
         self.btn_user_exit = QPushButton(" 프로그램 종료")
         self.btn_user_exit.setIcon(QIcon.fromTheme("application-exit"))
         self.btn_user_exit.setFixedSize(160, 50)
@@ -157,15 +217,11 @@ class MainWindow(QMainWindow):
         """)
         self.btn_user_exit.clicked.connect(self.on_exit_button_click)
         bottom_layout.addWidget(self.btn_user_exit)
-        
-        # 중앙: 수동 모드 상태 표시 (여백으로 중앙 정렬)
         bottom_layout.addStretch()
         self.lbl_manual_indicator = QLabel("")
         self.lbl_manual_indicator.setStyleSheet("color: #FF5722; font-size: 20px; font-weight: bold;")
         bottom_layout.addWidget(self.lbl_manual_indicator)
         bottom_layout.addStretch()
-        
-        # 오른쪽 아래: 관리자 모드 버튼
         self.btn_go_admin = QPushButton(" 관리자 모드")
         self.btn_go_admin.setIcon(QIcon.fromTheme("preferences-system"))
         self.btn_go_admin.setFixedSize(160, 50)
@@ -175,11 +231,37 @@ class MainWindow(QMainWindow):
         """)
         self.btn_go_admin.clicked.connect(self.switch_to_admin)
         bottom_layout.addWidget(self.btn_go_admin)
-
         layout.addLayout(bottom_layout)
 
     # ============================================================
-    # 로직 메서드들
+    # [NEW] Vacuum 제어 슬롯 함수
+    # ============================================================
+    @Slot()
+    def on_user_vacuum_toggle(self):
+        """사용자 모드에서 Vacuum On/Off (31/30)"""
+        is_on = self.btn_user_vacuum.isChecked()
+        
+        # 31 = ON, 30 = OFF (관리자 모드 Test CMD 기준)
+        cmd_value = 31 if is_on else 30
+        
+        pub = self.ros_thread.get_publisher()
+        if pub and self.ros_thread.running:
+            pub.publish_ethercat_cmd(cmd_value)
+            
+            if is_on:
+                self.btn_user_vacuum.setText("Vacuum ON")
+                self.statusBar().showMessage(f"Vacuum ON (Cmd: {cmd_value})", 2000)
+            else:
+                self.btn_user_vacuum.setText("Vacuum OFF")
+                self.statusBar().showMessage(f"Vacuum OFF (Cmd: {cmd_value})", 2000)
+        else:
+            self.statusBar().showMessage("ROS 통신 오류", 2000)
+            # 통신 실패시 버튼 상태 원복 (선택 사항)
+            # self.btn_user_vacuum.setChecked(not is_on)
+
+
+    # ============================================================
+    # 기존 슬롯 함수들
     # ============================================================
     @Slot()
     def on_manual_mode_toggle(self):
@@ -187,13 +269,18 @@ class MainWindow(QMainWindow):
         if self.is_manual_mode:
             self.on_publish_command('i', "수동 모드 진입")
             self.btn_user_manual.setText("수동 모드 ON")
-            self.lbl_manual_indicator.setText("⚠️ 현재 수동 제어 모드입니다.")
+            self.lbl_manual_indicator.setText("⚠️ 현재 수동 제어 모드입니다. (입력 대기)")
             if self.current_action_state == self.STATE_ACTION_RUN:
                 self.current_action_state = self.STATE_IDLE
                 self.on_publish_command('s', "수동 전환에 따른 정지")
+            self.setFocus()
         else:
             self.btn_user_manual.setText("수동 모드 OFF")
             self.lbl_manual_indicator.setText("")
+            if self.manual_control_timer.isActive():
+                self.manual_control_timer.stop()
+                self.current_manual_key = None
+                self.current_manual_cmd = 0
         self._update_button_ui()
 
     @Slot()
@@ -227,7 +314,6 @@ class MainWindow(QMainWindow):
         self._update_button_ui()
 
     def _update_button_ui(self):
-        # 수동 모드 UI 처리
         if self.is_manual_mode:
             self.btn_user_toggle.setEnabled(False)
             self.btn_user_toggle.setText("\n수동 모드\n(MANUAL)")
@@ -235,24 +321,16 @@ class MainWindow(QMainWindow):
                 QPushButton { background-color: #555555; color: #AAAAAA; border-radius: 40px; font-size: 50px; font-weight: bold; border: 4px dashed #FF5722; }
             """)
             self.btn_user_toggle.setIcon(QIcon.fromTheme("input-mouse"))
-            
-            # 관리자 버튼 비활성
             if hasattr(self, 'btn_t'): self.btn_t.setEnabled(False)
             return
-
-        # 일반 모드 UI 처리
         self.btn_user_toggle.setEnabled(True)
-        
-        # 관리자 버튼 복구
         if hasattr(self, 'btn_t'):
             super_btns = [self.btn_t, self.btn_i, self.btn_m, self.btn_e]
             for btn in super_btns: btn.setEnabled(True)
-
             if self.current_action_state == self.STATE_ACTION_RUN:
                 self.btn_t.setText("정지")
                 self.btn_t.setStyleSheet("background-color: orange; color: white; font-size: 14pt; font-weight: bold;")
                 self.btn_t.setIcon(QIcon.fromTheme("media-playback-pause"))
-                
                 self.btn_user_toggle.setText("\n동작 정지\n(STOP)")
                 self.btn_user_toggle.setIcon(QIcon.fromTheme("media-playback-pause"))
                 self.btn_user_toggle.setStyleSheet("""
@@ -263,19 +341,16 @@ class MainWindow(QMainWindow):
                 self.btn_t.setText("동작 실행")
                 self.btn_t.setStyleSheet(f"background-color: {self.btn_t.property('color')}; color: white; font-size: 14pt; font-weight: bold;")
                 self.btn_t.setIcon(QIcon.fromTheme("media-playback-start"))
-                
                 self.btn_user_toggle.setText("\n동작 실행\n(RUN)")
                 self.btn_user_toggle.setIcon(QIcon.fromTheme("media-playback-start"))
                 self.btn_user_toggle.setStyleSheet("""
                     QPushButton { background-color: #4CAF50; color: white; border-radius: 40px; font-size: 60px; font-weight: bold; } 
                     QPushButton:hover { background-color: #45a049; }
                 """)
-
             if self.current_action_state == self.STATE_EMERGENCY:
                 self.btn_e.setText("초기화")
                 self._toggle_emergency_style()
                 self.btn_t.setEnabled(False); self.btn_i.setEnabled(False); self.btn_m.setEnabled(False)
-                
                 self.btn_user_toggle.setEnabled(False)
                 self.btn_user_toggle.setText("\n긴급 정지\n(EMERGENCY)")
                 self.btn_user_toggle.setStyleSheet("background-color: #F44336; color: white; border-radius: 40px; font-size: 50px;")
@@ -283,11 +358,20 @@ class MainWindow(QMainWindow):
             elif self.current_action_state == self.STATE_MAINTENANCE:
                 self.btn_m.setText("대기 모드"); self.btn_m.setStyleSheet("background-color: orange;")
                 self.btn_t.setEnabled(False); self.btn_i.setEnabled(False)
-                
                 self.btn_user_toggle.setEnabled(False)
                 self.btn_user_toggle.setText("\n정비 모드\n(MAINTENANCE)")
                 self.btn_user_toggle.setStyleSheet("background-color: #2196F3; color: white; border-radius: 40px; font-size: 50px;")
                 self.btn_user_manual.setEnabled(False)
+
+    def _check_connection_status(self):
+        current_time = time.time()
+        time_diff = current_time - self.last_data_time
+        if self.last_data_time == 0.0 or time_diff > 3.0:
+            self.lbl_connection_status.setText("NOT CONNECTED")
+            self.lbl_connection_status.setStyleSheet("background-color: #F44336; color: white; border-radius: 10px; padding: 10px; font-weight: bold; font-size: 16px;")
+        else:
+            self.lbl_connection_status.setText("CONNECTED")
+            self.lbl_connection_status.setStyleSheet("background-color: #4CAF50; color: white; border-radius: 10px; padding: 10px; font-weight: bold; font-size: 16px;")
 
     def _setup_admin_mode_ui(self):
         main_h_layout = QHBoxLayout(self.admin_mode_widget)
@@ -400,9 +484,7 @@ class MainWindow(QMainWindow):
         self.emergency_blink_on = not self.emergency_blink_on
 
     def _apply_dynamic_style(self, current_height):
-        # Admin UI가 생성되었는지 확인
         if not hasattr(self, 'btn_t'): return
-
         ratio = max(1.0, current_height / self.BASE_HEIGHT)
         all_btns = [
             self.btn_t, self.btn_i, self.btn_m, self.btn_e, 

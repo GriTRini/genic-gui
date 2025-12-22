@@ -1,11 +1,17 @@
 # src/log_viewer.py
 import pandas as pd
 import os
+
+# [수정 1] 백엔드 설정 (반드시 pyplot import 전에 해야 함)
+import matplotlib
+matplotlib.use('QtAgg') 
+
 import matplotlib.pyplot as plt
-# Matplotlib 3D 플롯을 위한 모듈 임포트
+from matplotlib.figure import Figure  # [수정 2] plt.figure 대신 사용할 클래스
 from mpl_toolkits.mplot3d import Axes3D 
+
+# PySide6 호환 캔버스 및 툴바
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-# 🚨 Matplotlib 툴바 임포트 추가
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 
 from PySide6.QtWidgets import (
@@ -15,7 +21,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Slot, Qt, QTimer
 
 # -----------------
-# 3D 플롯 전용 새 창 클래스 (변화 없음)
+# 3D 플롯 전용 새 창 클래스
 # -----------------
 class Plot3DWindow(QMainWindow):
     """
@@ -26,17 +32,20 @@ class Plot3DWindow(QMainWindow):
         self.setWindowTitle("로봇 End-Effector 3D 경로")
         self.setGeometry(150, 150, 800, 700)
         
-        self.figure = plt.figure(figsize=(7, 6))
+        # [수정 3] plt.figure() 대신 Figure() 객체 직접 생성 (충돌 방지)
+        self.figure = Figure(figsize=(7, 6))
+        
+        # Figure 객체에 3D 서브플롯 추가
         self.ax_3d = self.figure.add_subplot(111, projection='3d')
         
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
-        # 🚨 3D 뷰어 창에도 툴바 추가
+        # 툴바 추가
         self.toolbar = NavigationToolbar(self.canvas, self)
         
         main_layout = QVBoxLayout()
-        main_layout.addWidget(self.toolbar) # 툴바를 캔버스 위에 추가
+        main_layout.addWidget(self.toolbar) 
         main_layout.addWidget(self.canvas)
         
         container = QWidget()
@@ -68,15 +77,15 @@ class Plot3DWindow(QMainWindow):
         self.canvas.draw()
         
 # -----------------
-# 메인 뷰어 창 클래스 수정: 2D Axes 2개 + 툴바 추가
+# 메인 뷰어 창 클래스
 # -----------------
 class LogViewerWindow(QMainWindow):
     # FSM 상태별 배경색 정의
     STATE_COLORS = {
-        'OPERATING': '#4CAF5030',   # 연한 초록색 (실행)
-        'IDLE': '#9E9E9E30',        # 연한 회색 (대기)
-        'MAINTENANCE': '#FF980030', # 연한 주황색 (정비)
-        'EMERGENCY_STOP': '#F4433630' # 연한 빨간색 (긴급 정지)
+        'OPERATING': '#4CAF5030',   # 연한 초록색
+        'IDLE': '#9E9E9E30',        # 연한 회색
+        'MAINTENANCE': '#FF980030', # 연한 주황색
+        'EMERGENCY_STOP': '#F4433630' # 연한 빨간색
     }
 
     def __init__(self, parent=None):
@@ -87,16 +96,15 @@ class LogViewerWindow(QMainWindow):
         self.plot_3d_window = Plot3DWindow(self)
         self.loaded_data = None 
 
-        # Matplotlib Figure 및 Axes 초기화
-        self.figure = plt.figure(figsize=(10, 8))
+        # [수정 4] plt.figure() 대신 Figure() 객체 직접 생성
+        self.figure = Figure(figsize=(10, 8))
         self.ax_joint = self.figure.add_subplot(2, 1, 1) 
         self.ax_pos_2d = self.figure.add_subplot(2, 1, 2) 
         
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
-        # 🚨 핵심 수정: 2D 그래프용 툴바 추가
-        # NavigationToolbar2QT를 사용하여 캔버스에 줌, 이동, 저장 등의 기능을 제공합니다.
+        # 툴바 추가
         self.toolbar = NavigationToolbar(self.canvas, self)
         
         # UI 구성 요소
@@ -117,7 +125,6 @@ class LogViewerWindow(QMainWindow):
         control_layout.addWidget(self.status_label)
         
         main_layout = QVBoxLayout()
-        # 🚨 툴바를 메인 레이아웃의 상단에 추가
         main_layout.addWidget(self.toolbar)
         main_layout.addLayout(control_layout)
         main_layout.addWidget(self.canvas)
@@ -153,7 +160,6 @@ class LogViewerWindow(QMainWindow):
             Y = df[pos_cols[1]]
             Z = df[pos_cols[2]]
             
-            # 3D 뷰어 창을 띄우기 전에 3D 플롯을 수행합니다.
             self.plot_3d_window.plot_3d(X, Y, Z)
             self.plot_3d_window.show() 
         else:
@@ -161,7 +167,7 @@ class LogViewerWindow(QMainWindow):
 
 
     def plot_data(self, file_path):
-        """CSV 파일을 읽고 FSM 상태 색상 배경과 2D 그래프 (Joint/Pos 분리)를 그립니다."""
+        """CSV 파일을 읽고 FSM 상태 색상 배경과 2D 그래프를 그립니다."""
         try:
             # 1. 데이터 로드 
             df = pd.read_csv(file_path)
@@ -177,13 +183,14 @@ class LogViewerWindow(QMainWindow):
             self.ax_joint.clear()
             self.ax_pos_2d.clear()
             
-            # 3. FSM 상태 배경색 하이라이팅 (두 그래프 모두에 적용)
+            # 3. FSM 상태 배경색 하이라이팅
             self._highlight_fsm_states(df, [self.ax_joint, self.ax_pos_2d], time_col)
             
             # 4. 데이터 플롯
             
             # 4-1. Joint Angles (상단 그래프 - ax_joint)
             joint_cols = [f'Joint{i}' for i in range(1, 7)]
+            # pandas plot은 내부적으로 ax= 매개변수를 받으면 해당 axes를 사용함
             df.plot(y=joint_cols, x=time_col, ax=self.ax_joint, legend=False)
             
             self.ax_joint.set_ylabel("Joint Angles (rad)")
@@ -217,7 +224,6 @@ class LogViewerWindow(QMainWindow):
 
     def _highlight_fsm_states(self, df, axs, time_col):
         """FSM 상태 변화에 따라 그래프 배경에 색상을 칠합니다."""
-        
         state_col = 'FSM_State'
         
         if df.empty or state_col not in df.columns or df[time_col].empty:
