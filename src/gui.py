@@ -74,7 +74,8 @@ class MainWindow(QMainWindow):
         
         # 창 모드로 시작
         self.resize(1280, 800)
-        self.show()
+        # self.show()
+        self.showFullScreen()
         
         self._apply_dynamic_style(self.height())
         self.statusBar().showMessage("시스템 준비 완료", 5000)
